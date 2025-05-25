@@ -1,5 +1,4 @@
 from flask import Flask, render_template, make_response
-from random import randrange
 from recommender import get_recommendations
 from db import add_reward
 
