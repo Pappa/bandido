@@ -2,6 +2,18 @@
 <html>
   <head>
     <title>bandido</title>
+    <script>
+        function reward() {
+            const model = Math.floor(Math.random() * 10);
+            const reward = Math.floor(Math.random() * 10);
+            fetch(`/reward/${model}/${reward}`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                }
+            })
+        }
+    </script>
   </head>
   <body>
     <ul>
@@ -9,7 +21,7 @@
         <a href="/recommend">Recommendations</a>
       </li>
       <li>
-        <a href="/reward/{{ model }}/{{ reward }}">Rewards</a>
+        <a href="javascript:reward()">Rewards</a>
       </li>
     </ul>
   </body>

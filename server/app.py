@@ -1,12 +1,14 @@
 from flask import Flask, render_template, make_response
 from random import randrange
 from recommender import get_recommendations
+from db import add_reward
+
 app = Flask(__name__)
 
 
 @app.route('/')
 def index():
-    return render_template('index.html', model=randrange(10), reward=randrange(10))
+    return render_template('index.html')
 
 
 @app.route('/recommend')
@@ -16,5 +18,7 @@ def recommend():
 
 @app.route('/reward/<model>/<reward>', methods=['GET', 'POST'])
 def reward(model: int, reward: int):
-    print(model, reward)
+    add_reward(model, reward)
     return make_response({}, 204)
+
+
