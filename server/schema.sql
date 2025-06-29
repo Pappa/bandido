@@ -1,1 +1,0 @@
-create table if not exists rewards (id INTEGER PRIMARY KEY AUTOINCREMENT, model INTEGER, reward INTEGER, timestamp CURRENT_TIMESTAMP);

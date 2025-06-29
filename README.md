@@ -1,1 +1,1 @@
-# bandido - an infinite-armed bandit experiment
+# bandido - multi-armed bandit experiments
