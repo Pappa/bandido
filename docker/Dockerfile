@@ -5,18 +5,11 @@ FROM tensorflow/tensorflow:2.15.0-gpu-jupyter
 
 # RUN apt-get install -y libcairo2-dev pkg-config python3-dev
 
-# RUN pip install pip --upgrade
+RUN pip install --upgrade pip
 
-# RUN pip install pipdeptree
-# RUN pipdeptree
-
-# RUN pip uninstall -y jupyterlab jupyter notebook jupyterlab_widgets jupyter_server
-# RUN pip install jupyter_server==2.14.2
-
-# RUN pip install setuptools --upgrade
-
-RUN pip install tf_keras==2.18.0
+RUN pip install tf_keras==2.15.0
 RUN pip install tf_agents==0.19.0
+RUN pip install tensorflow[and-cuda]~=2.15.0
 RUN pip install pandas==2.3.0
 # RUN pip install numpy==2.0.2
 # RUN pip install pycairo
@@ -36,7 +29,6 @@ RUN pip install pandas==2.3.0
 
 
 RUN mkdir -p /tf/notebooks
-# COPY ./notebooks /tf/notebooks
 
 # CMD ["bash", "-c", "source /etc/bash.bashrc && jupyter notebook --notebook-dir=/tf --ip 0.0.0.0 --no-browser --allow-root --NotebookApp.token='' --NotebookApp.password=''"]
 # CMD ["bash", "-c", "source /etc/bash.bashrc && jupyter server --ip 0.0.0.0 --no-browser --allow-root --ServerApp.token='' --ServerApp.password=''"]
