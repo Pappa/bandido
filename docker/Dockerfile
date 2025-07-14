@@ -30,5 +30,4 @@ RUN pip install pandas==2.3.0
 
 RUN mkdir -p /tf/notebooks
 
-# CMD ["bash", "-c", "source /etc/bash.bashrc && jupyter notebook --notebook-dir=/tf --ip 0.0.0.0 --no-browser --allow-root --NotebookApp.token='' --NotebookApp.password=''"]
-# CMD ["bash", "-c", "source /etc/bash.bashrc && jupyter server --ip 0.0.0.0 --no-browser --allow-root --ServerApp.token='' --ServerApp.password=''"]
+CMD ["bash", "-c", "source /etc/bash.bashrc && jupyter lab --notebook-dir=/tf --ip 0.0.0.0 --no-browser --allow-root"]
