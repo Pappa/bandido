@@ -1,47 +1,94 @@
-import os
 import pandas as pd
 
-# --- Centralized Configuration ---
 # List of symbols to be used throughout the project.
-# The data loading function will handle stripping '/USDT' if present.
 SYMBOLS = ['BTC', 'DOGE', 'XRP', 'ETH', 'SOL']
 
-# Data and Model Paths
-DATA_FILEPATH = 'data/ohlcv.csv.gz'
-POLICY_SAVE_PATH = 'policy'
 
-# Model Hyperparameters
-CONTEXT_LENGTH = 10
-NUM_TRAINING_STEPS = 1000  # Increased for more meaningful training
-ALPHA = 1.0 # LinUCB exploration parameter
-
-
-# --- Data Loading Function ---
-def load_and_prepare_data(filepath, symbols):
-    """Loads and prepares the data from the source CSV."""
-    if not os.path.exists(filepath):
-        raise FileNotFoundError(f"Data file not found at {filepath}. Please ensure the file exists.")
-    
-    print(f"Loading data from {filepath}...")
-    df = pd.read_csv(filepath, compression='gzip', parse_dates=['timestamp']).set_index('timestamp')
-    
+def preprocess_data(df):
+    df.sort_values(by=['symbol', 'timestamp'], inplace=True)
     # Ensure symbol format is consistent (e.g., 'BTC' not 'BTC/USDT')
     df['symbol'] = df['symbol'].str.split('/', n=1).str[0]
+
+    df['close_return'] = df['close'].pct_change()
+    df['volume_return'] = df['volume'].pct_change()
+
+    df['rsi'] = calculate_rsi(df)
+
+    return df.dropna()
+
+def calculate_rsi(data, window=14):
+    delta = data['close'] - data['open']
+    gain = delta.where(delta > 0, 0)
+    loss = -delta.where(delta < 0, 0)
+
+    avg_gain = gain.groupby(data['symbol']).transform(
+        lambda x: x.ewm(com=window - 1, min_periods=window, adjust=False).mean()
+    )
+    avg_loss = loss.groupby(data['symbol']).transform(
+        lambda x: x.ewm(com=window - 1, min_periods=window, adjust=False).mean()
+    )
+
+    relative_strength = avg_gain / avg_loss
+
+    rsi = 100 - (100 / (1 + relative_strength))
+
+    return rsi
+
+
+
+def create_wide_format_data(long_df: pd.DataFrame, symbols: list[str], features: list[str]) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Converts a long-format DataFrame into two wide-format DataFrames.
+
+    1. An observation DataFrame where each row is a timestamp and columns are flattened features.
+    2. A prices DataFrame for easy reward calculation.
+
+    Args:
+        long_df (pd.DataFrame): The input DataFrame in long format.
+        symbols (list[str]): The ordered list of crypto symbols.
+        features (list[str]): The list of feature columns to use for observations.
+
+    Returns:
+        A tuple containing (observation_df, prices_df).
+    """
+    print("Converting data to wide format for observations and prices...")
     
-    all_data = {}
-    print("Processing symbols:", symbols)
+    # --- Create the wide observation DataFrame ---
+    observation_df = long_df.pivot(
+        index='timestamp', 
+        columns='symbol', 
+        values=features
+    )
+    
+    # The pivot creates a multi-level column index, e.g., ('rsi', 'BTC').
+    # We need to flatten this into a single-level index, e.g., 'BTC_rsi'.
+    # We must also enforce the correct order: all of BTC's features, then all of ETH's, etc.
+    new_obs_cols = []
+    final_obs_cols = []
     for symbol in symbols:
-        symbol_df = df[df['symbol'] == symbol][['close', 'volume']]
-        symbol_df['close_return'] = symbol_df['close'].pct_change()
-        symbol_df['volume_return'] = symbol_df['volume'].pct_change()
-        all_data[symbol] = symbol_df[['close_return', 'volume_return', 'close']]
-        
-    combined_df = pd.concat(all_data, axis=1)
-    combined_df.columns = ['_'.join(col).strip() for col in combined_df.columns.values]
+        for feature in features:
+            new_obs_cols.append(f'{symbol}_{feature}')
+            final_obs_cols.append((feature, symbol)) # Original multi-level name
+            
+    observation_df = observation_df[final_obs_cols] # Enforce column order
+    observation_df.columns = new_obs_cols # Rename to single-level
     
-    # Use forward-fill for missing values and then drop any remaining NaNs at the start
-    combined_df.ffill(inplace=True)
-    combined_df.dropna(inplace=True)
+    # --- Create the wide prices DataFrame ---
+    prices_df = long_df.pivot(
+        index='timestamp',
+        columns='symbol',
+        values='close'
+    )
+    prices_df = prices_df[symbols] # Enforce column order
     
-    print(f"Data prepared. Shape: {combined_df.shape}")
-    return combined_df
+    # Drop any rows with NaN values that might result from pivoting
+    observation_df.dropna(inplace=True)
+    prices_df.dropna(inplace=True)
+    
+    # Align the indexes of both dataframes to ensure they match
+    aligned_index = observation_df.index.intersection(prices_df.index)
+    observation_df = observation_df.loc[aligned_index]
+    prices_df = prices_df.loc[aligned_index]
+    
+    print("Wide format conversion complete.")
+    return observation_df, prices_df

@@ -1,94 +1,101 @@
 import numpy as np
+import pandas as pd
 import tensorflow as tf
 
 from tf_agents.environments import py_environment
-from tf_agents.specs import array_spec, tensor_spec
+from tf_agents.specs import array_spec
 from tf_agents.trajectories import time_step as ts
-from tf_agents.replay_buffers import tf_uniform_replay_buffer
 
 class CryptoTradingEnvironment(py_environment.PyEnvironment):
     """
     A TF-Agents environment for a crypto trading multi-armed bandit.
-    Manages state using an internal replay buffer.
-    """
-    def __init__(self, data, symbols, context_len):
-        super().__init__()
-        self._data = data
-        self._context_len = context_len
-        self._symbols = symbols
-        self._num_cryptos = len(self._symbols)
-        
-        self._minimal_obs_size = self._num_cryptos * 2 
-        observation_size = self._minimal_obs_size * self._context_len
 
-        # Define specs
+    This version is optimized for performance by accepting pre-calculated,
+    "wide-format" DataFrames for observations and prices.
+    """
+    def __init__(self, observation_df: pd.DataFrame, prices_df: pd.DataFrame, symbols: list[str]):
+        super().__init__()
+
+        # --- Store pre-calculated data ---
+        self._obs_data = observation_df
+        self._price_data = prices_df
+        self._symbols = symbols
+        self._num_cryptos = len(symbols)
+        
+        # --- Define Action and Observation Specs ---
+        num_actions = self._num_cryptos * 3  # BUY, HOLD, SELL for each crypto
         self._action_spec = array_spec.BoundedArraySpec(
-            shape=(), dtype=np.int32, minimum=0, maximum=self._num_cryptos * 2 - 1, name='action'
+            shape=(), dtype=np.int32, minimum=0, maximum=num_actions - 1, name='action'
         )
+
+        # The observation shape is now simply the number of columns in the obs_df
         self._observation_spec = array_spec.ArraySpec(
-            shape=(observation_size,), dtype=np.float32, name='context'
+            shape=(len(self._obs_data.columns),), dtype=np.float32, name='context'
         )
         
-        # Internal replay buffer to manage state history
-        data_spec = tensor_spec.TensorSpec([self._minimal_obs_size], dtype=tf.float32, name='minimal_observation')
-        self._replay_buffer = tf_uniform_replay_buffer.TFUniformReplayBuffer(
-            data_spec=data_spec, batch_size=1, max_length=self._context_len + 5
-        )
-        
-        # Environment state
+        # --- Environment State ---
         self._current_step_index = 0
         self._episode_ended = False
+
+    @property
+    def current_step(self):
+        return self._current_step_index
+
+    @property
+    def symbols(self):
+        return self._symbols
 
     def action_spec(self):
         return self._action_spec
 
     def observation_spec(self):
         return self._observation_spec
+    
+    def _get_observation(self) -> np.ndarray:
+        """
+        PERFORMANCE WIN: This is now a simple, ultra-fast lookup.
+        """
+        return self._obs_data.iloc[self._current_step_index].values.astype(np.float32)
 
-    def _get_minimal_observation(self, index):
-        obs_slice = []
-        for symbol in self._symbols:
-            obs_slice.append(self._data.iloc[index][f'{symbol}_close_return'])
-            obs_slice.append(self._data.iloc[index][f'{symbol}_volume_return'])
-        return np.array(obs_slice, dtype=np.float32)
-
-    def _observe(self):
-        num_items = self._replay_buffer.num_frames()
-        if num_items == 0:
-            return np.zeros(self._observation_spec.shape, dtype=np.float32)
-
-        dataset = self._replay_buffer.as_dataset(single_deterministic_pass=True)
-        batched_items = next(iter(dataset.batch(num_items)))
-        
-        all_items_tensor = batched_items[0]
-        
-        context = tf.reshape(all_items_tensor[-self._context_len:], [-1])
-        return context.numpy()
-
-    def _reset(self):
-        self._replay_buffer.clear()
+    def _reset(self) -> ts.TimeStep:
+        """Resets the environment to the first time step."""
+        self._current_step_index = 0
         self._episode_ended = False
-        self._current_step_index = self._context_len 
-        for i in range(self._current_step_index):
-            self._replay_buffer.add_batch(tf.expand_dims(self._get_minimal_observation(i), 0))
-        return ts.restart(self._observe())
+        return ts.restart(self._get_observation())
 
-    def _step(self, action):
+    def _step(self, action: int) -> ts.TimeStep:
+        """Applies an action, calculates the reward, and steps the environment."""
         if self._episode_ended:
             return self.reset()
 
-        crypto_index = action // 2
-        is_buy_action = action % 2 == 0
-        column_name = f'{self._symbols[crypto_index]}_close'
-        current_price = self._data.iloc[self._current_step_index][column_name]
-        next_price = self._data.iloc[self._current_step_index + 1][column_name]
-        reward = ((next_price - current_price) / current_price) if is_buy_action else ((current_price - next_price) / current_price)
+        # Decode the action to find the symbol and trade type
+        crypto_index = action // 3
+        trade_type_idx = action % 3  # 0: BUY, 1: HOLD, 2: SELL
         
-        self._replay_buffer.add_batch(tf.expand_dims(self._get_minimal_observation(self._current_step_index), 0))
+        # Calculate the reward
+        reward = 0.0
+        if trade_type_idx != 1:  # No reward for HOLD
+            symbol_to_trade = self._symbols[crypto_index]
+            
+            # Use the dedicated prices DataFrame for a fast lookup
+            current_price = self._price_data.iloc[self._current_step_index][symbol_to_trade]
+            next_price = self._price_data.iloc[self._current_step_index + 1][symbol_to_trade]
+            
+            if trade_type_idx == 0:  # BUY
+                reward = (next_price - current_price) / current_price
+            elif trade_type_idx == 2:  # SELL
+                reward = (current_price - next_price) / current_price
+
+        # Advance the environment state
         self._current_step_index += 1
         
-        if self._current_step_index >= len(self._data) - 2:
+        # Check if the episode has ended
+        if self._current_step_index >= len(self._obs_data) - 1:
             self._episode_ended = True
-        
-        observation = self._observe()
-        return ts.termination(observation, reward) if self._episode_ended else ts.transition(observation, reward)
+
+        # Return the correct TimeStep object
+        if self._episode_ended:
+            # We must still provide an observation, even on the last step
+            return ts.termination(self._get_observation(), reward)
+        else:
+            return ts.transition(self._get_observation(), reward=reward, discount=1.0)

@@ -22,7 +22,7 @@ dict_value {
               name: "context"
               shape {
                 dim {
-                  size: 100
+                  size: 5
                 }
               }
               dtype: DT_FLOAT
@@ -47,7 +47,7 @@ dict_value {
                 dtype: DT_INT32
                 tensor_shape {
                 }
-                int_val: 9
+                int_val: 14
               }
             }
           }
