@@ -45,6 +45,10 @@ class CryptoTradingEnvironment(py_environment.PyEnvironment):
     def symbols(self):
         return self._symbols
 
+    @property
+    def price_data(self):
+        return self._price_data
+
     def action_spec(self):
         return self._action_spec
 
