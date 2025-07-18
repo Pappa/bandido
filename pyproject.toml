@@ -6,11 +6,11 @@ readme = "README.md"
 authors = [{ name = "Pappa", email = "dr.pappa@gmail.com" }]
 requires-python = ">=3.11"
 dependencies = [
-    #"numpy==2.0.2",
+    "numpy==2.0.2",
     "pandas==2.3.0",
-    "tensorflow==2.18.0",
-    "tf-agents==0.19.0",
-    "tf-keras==2.18.0",
+    # "tensorflow==2.18.0",
+    # "tf-agents==0.19.0",
+    # "tf-keras==2.18.0",
 ]
 
 [build-system]
@@ -18,5 +18,5 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [dependency-groups]
-dev = ["ipykernel==6.29.5"]
-# dev = ["ccxt>=4.4.91", "ipykernel==6.29.5"]
+# dev = ["ipykernel==6.29.5"]
+dev = ["ccxt>=4.4.91", "ipykernel==6.29.5"]
