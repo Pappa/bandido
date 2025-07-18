@@ -22,7 +22,7 @@ dict_value {
               name: "context"
               shape {
                 dim {
-                  size: 5
+                  size: 30
                 }
               }
               dtype: DT_FLOAT
