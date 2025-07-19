@@ -1,4 +1,5 @@
 import pandas as pd
+import numpy as np
 
 # List of symbols to be used throughout the project.
 SYMBOLS = ['BTC', 'DOGE', 'XRP', 'ETH', 'SOL']
@@ -8,16 +9,30 @@ def preprocess_data(df):
     df.sort_values(by=['symbol', 'timestamp'], inplace=True)
     # Ensure symbol format is consistent (e.g., 'BTC' not 'BTC/USDT')
     df['symbol'] = df['symbol'].str.split('/', n=1).str[0]
-
-    df['price_change'] = df['close'].pct_change()
-    df['volume_change'] = df['volume'].pct_change()
+    
+    # Ensure 0 volume does not result in division by 0
+    df['volume'] = df['volume'].replace(0, 1e-9)
+    df['price_change'] = df.groupby('symbol')['close'].transform(lambda x: x.pct_change())
+    df['volume_change'] = df.groupby('symbol')['volume'].transform(lambda x: x.pct_change())
 
     df['rsi'] = calculate_rsi(df)
     macd = calculate_macd(df)
     bb = calculate_bollinger_bands(df)
     return pd.concat([df, macd, bb], axis=1).dropna()
+    
 
-def calculate_rsi(data, window=14):
+def calculate_rsi(data: pd.DataFrame, window: int = 14) -> pd.Series:
+    """
+    Calculates the Relative Strength Index (RSI) for each symbol in the DataFrame.
+
+    Args:
+        data (pd.DataFrame): Input DataFrame with 'timestamp', 'symbol', and 'close' columns. 
+        Should be pre-sorted by symbol and then by timestamp.
+        window (int): The lookback period for the RSI calculation (default is 14).
+
+    Returns:
+        pd.Series: The RSI for each symbol.
+    """
     delta = data['close'] - data['open']
     gain = delta.where(delta > 0, 0)
     loss = -delta.where(delta < 0, 0)
