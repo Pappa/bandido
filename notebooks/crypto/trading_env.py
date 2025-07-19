@@ -56,9 +56,7 @@ class CryptoTradingEnvironment(py_environment.PyEnvironment):
         return self._observation_spec
     
     def _get_observation(self) -> np.ndarray:
-        """
-        PERFORMANCE WIN: This is now a simple, ultra-fast lookup.
-        """
+        """Returns the observation for the current step."""
         return self._obs_data.iloc[self._current_step_index].values.astype(np.float32)
 
     def _reset(self) -> ts.TimeStep:
@@ -100,6 +98,6 @@ class CryptoTradingEnvironment(py_environment.PyEnvironment):
         # Return the correct TimeStep object
         if self._episode_ended:
             # We must still provide an observation, even on the last step
-            return ts.termination(self._get_observation(), reward)
+            return ts.termination(self._get_observation(), reward=reward)
         else:
             return ts.transition(self._get_observation(), reward=reward, discount=1.0)
