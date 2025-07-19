@@ -110,7 +110,7 @@ class CryptoTradingEnvironment(py_environment.PyEnvironment):
     - Overrides impossible actions (e.g., selling what you don't own).
     - Calculates reward based on the change in total portfolio value.
     """
-    def __init__(self, observation_df: pd.DataFrame, prices_df: pd.DataFrame, symbols: list[str], initial_funds: float = 10000.0, trade_size_usd: float = 1000.0):
+    def __init__(self, observation_df: pd.DataFrame, prices_df: pd.DataFrame, symbols: list[str], seed_fund: float = 100.0, trade_size: float = 20.0, invalid_action_penalty: float = -1.0):
         super().__init__()
 
         # --- Store pre-calculated data ---
@@ -120,9 +120,12 @@ class CryptoTradingEnvironment(py_environment.PyEnvironment):
         self._num_cryptos = len(symbols)
         
         # --- Portfolio State ---
-        self._initial_funds = initial_funds
-        self._trade_size = trade_size_usd
-        self._cash_balance = initial_funds
+        self._seed_fund = seed_fund
+        self._trade_size = trade_size
+        self._cash_balance = seed_fund
+        self._balance_history = [seed_fund]
+        self._trade_history = []
+        self._invalid_action_penalty = invalid_action_penalty
         # Use a pandas Series for easy lookups and calculations
         self._asset_holdings = pd.Series(0.0, index=self._symbols)
         
@@ -158,6 +161,14 @@ class CryptoTradingEnvironment(py_environment.PyEnvironment):
     def price_data(self):
         return self._price_data
 
+    @property
+    def balance_history(self):
+        return np.array(self._balance_history)
+
+    @property
+    def trade_history(self):
+        return np.array(self._trade_history)
+
     def action_spec(self):
         return self._action_spec
 
@@ -174,7 +185,7 @@ class CryptoTradingEnvironment(py_environment.PyEnvironment):
         
         # 2. Get portfolio features
         # Normalize cash by initial funds to keep it in a reasonable range (0-1+)
-        normalized_cash = self._cash_balance / self._initial_funds
+        normalized_cash = self._cash_balance / self._seed_fund
         
         # We need to normalize asset holdings as well. A simple way is to get their
         # current value in USD and divide by the total portfolio value.
@@ -203,7 +214,7 @@ class CryptoTradingEnvironment(py_environment.PyEnvironment):
         """Resets the environment, including the portfolio."""
         self._current_step_index = 0
         self._episode_ended = False
-        self._cash_balance = self._initial_funds
+        self._cash_balance = self._seed_fund
         self._asset_holdings = pd.Series(0.0, index=self._symbols)
         return ts.restart(self._get_observation())
 
@@ -219,14 +230,16 @@ class CryptoTradingEnvironment(py_environment.PyEnvironment):
         trade_type_idx = action % 3  # 0: BUY, 1: HOLD, 2: SELL
         symbol_to_trade = self._symbols[crypto_index]
 
-        # --- 2. NEW: Check if the action is valid and override if not ---
-        original_action = action
+        # --- 2. Check if the action is valid and override if not ---
+        is_valid_action = True
         if trade_type_idx == 0 and self._cash_balance < self._trade_size:
             # Not enough cash to buy, override to HOLD
             trade_type_idx = 1
+            is_valid_action = False
         elif trade_type_idx == 2 and self._asset_holdings[symbol_to_trade] <= 0:
             # No assets to sell, override to HOLD
             trade_type_idx = 1
+            is_valid_action = False
 
         # --- 3. Execute the (potentially overridden) trade ---
         if trade_type_idx == 0:  # BUY
@@ -242,9 +255,20 @@ class CryptoTradingEnvironment(py_environment.PyEnvironment):
         # --- 4. Advance time and calculate the new portfolio value ---
         self._current_step_index += 1
         portfolio_value_after = self._calculate_portfolio_value(self._current_step_index)
+
+        # --- 5. Update balance history and trade history ---
+        self._balance_history.append(portfolio_value_after)
+        if not is_valid_action or trade_type_idx == 1:
+            self._trade_history.append((symbol_to_trade, int(is_valid_action), 1, 0))
+        else:
+            amount_to_trade = amount_to_buy if trade_type_idx == 0 else amount_to_sell
+            self._trade_history.append((symbol_to_trade, int(is_valid_action), trade_type_idx, amount_to_trade))
         
         # --- 5. NEW: Calculate reward based on portfolio value change ---
         reward = (portfolio_value_after - portfolio_value_before) / portfolio_value_before
+
+        if not is_valid_action:
+            reward += self._invalid_action_penalty
 
         # --- 6. Check for end of episode ---
         if self._current_step_index >= len(self._obs_data) - 1:
