@@ -102,11 +102,11 @@ class BaseCryptoTradingEnvironment(py_environment.PyEnvironment):
         # Calculate the reward
         reward = 0.0
         if trade_type_idx != TradeType.HOLD:  # No reward for HOLD
-            symbol_to_trade = self._symbols[crypto_index]
+            symbol = self._symbols[crypto_index]
 
             # Use the dedicated prices DataFrame for a fast lookup
-            current_price = self._price_data.iloc[self._current_step_index][symbol_to_trade]
-            next_price = self._price_data.iloc[self._current_step_index + 1][symbol_to_trade]
+            current_price = self._price_data.iloc[self._current_step_index][symbol]
+            next_price = self._price_data.iloc[self._current_step_index + 1][symbol]
 
             if trade_type_idx == TradeType.BUY:  # BUY
                 reward = (next_price - current_price) / current_price
@@ -135,7 +135,7 @@ class CryptoTradingEnvironment(BaseCryptoTradingEnvironment):
     - Overrides impossible actions (e.g., selling what you don't own).
     - Calculates reward based on the change in total portfolio value.
     """
-    def __init__(self, observation_df: pd.DataFrame, prices_df: pd.DataFrame, symbols: list[str], seed_fund: float = 100.0, trade_size: float = 20.0, trade_fee: float = 0.005, invalid_action_penalty: float = -1.0):
+    def __init__(self, observation_df: pd.DataFrame, prices_df: pd.DataFrame, symbols: list[str], seed_fund: float = 100.0, trade_size: float = 20.0, trade_fee: float = 0.005, invalid_action_penalty: float = -0.001):
 
         super().__init__(observation_df, prices_df, symbols)
 
@@ -185,119 +185,163 @@ class CryptoTradingEnvironment(BaseCryptoTradingEnvironment):
         Returns the observation, which is now a combination of market
         features and the agent's own portfolio state.
         """
-        # 1. Get market features (same as before)
         market_features = self._obs_data.iloc[self._current_step_index].values
-
-        # 2. Get portfolio features
-        # Normalize cash by initial funds to keep it in a reasonable range (0-1+)
         normalized_cash = self._cash_balance / self._seed_fund
-
-        # We need to normalize asset holdings as well. A simple way is to get their
-        # current value in USD and divide by the total portfolio value.
         current_prices = self._price_data.iloc[self._current_step_index]
-        asset_value = self._calculate_asset_value(self._current_step_index)
-
-        # Avoid division by zero at the very start
-        if asset_value == 0:
-            normalized_holdings = self._asset_holdings.values
+        total_value = self._calculate_asset_value(self._current_step_index) + self._cash_balance
+        
+        if total_value == 0:
+            # Handle edge case at the beginning or if bankrupt
+            normalized_holdings = np.zeros(self._num_cryptos)
         else:
-            normalized_holdings = (self._asset_holdings * current_prices).values / asset_value
+            # Normalize each asset's value as a percentage of the total portfolio
+            normalized_holdings = (self._asset_holdings * current_prices).values / total_value
 
         portfolio_features = np.append(normalized_holdings, normalized_cash)
-
-        # 3. Concatenate and return
-        full_observation = np.concatenate([market_features, portfolio_features])
-        return full_observation.astype(np.float32)
+        return np.concatenate([market_features, portfolio_features]).astype(np.float32)
 
     def _calculate_asset_value(self, step_index: int) -> float:
         """Helper function to calculate the total value of the portfolio."""
         current_prices = self._price_data.iloc[step_index]
         asset_values = self._asset_holdings * current_prices
         return asset_values.sum()
+    
+    
+    def _is_valid_action(self, trade_type: TradeType, symbol: str) -> bool:
+        if trade_type == TradeType.BUY and self._cash_balance < self._trade_size:
+            return False
+        elif trade_type == TradeType.SELL and self._asset_holdings[symbol] <= 0:
+            return False
+        return True
+    
+
+    def _calculate_pnl_reward(self, step_index: int, trade_type: TradeType, symbol: str) -> float:
+        """
+        Calculates the P&L reward for a given action at a specific step_index,
+        accounting for trade fees. This is a simulation and does NOT change the
+        environment's actual portfolio state.
+        """
+        # 1. No reward for HOLD
+        if trade_type == TradeType.HOLD:
+            return 0.0
+        
+        # 2. Get initial state for simulation
+        current_prices = self._price_data.iloc[step_index]
+        portfolio_value_before = self._calculate_asset_value(step_index) + self._cash_balance
+
+        # 3. Simulate the trade to get the hypothetical next-step portfolio
+        temp_cash = self._cash_balance
+        temp_holdings = self._asset_holdings.copy()
+
+        if trade_type == TradeType.BUY:
+            fee = self._trade_size * self._trade_fee
+            net_purchase_value = self._trade_size - fee
+            amount_bought = net_purchase_value / current_prices[symbol]
+            temp_holdings[symbol] += amount_bought
+            temp_cash -= self._trade_size
+            
+        elif trade_type == TradeType.SELL:
+            amount_to_sell = temp_holdings[symbol]
+            if amount_to_sell > 0:
+                total_sale_value = amount_to_sell * current_prices[symbol]
+                fee = total_sale_value * self._trade_fee
+                net_proceeds = total_sale_value - fee
+                temp_cash += net_proceeds
+                temp_holdings[symbol] = 0.0
+
+        # 4. Calculate the portfolio value at the *next* time step
+        next_prices = self._price_data.iloc[step_index + 1]
+        simulated_asset_value_after = (temp_holdings * next_prices).sum()
+        simulated_portfolio_value_after = simulated_asset_value_after + temp_cash
+
+        # 5. Return the percentage change (the reward)
+        # Avoid division by zero if portfolio value is 0
+        if portfolio_value_before == 0:
+            return 0.0
+        reward = (simulated_portfolio_value_after - portfolio_value_before) / portfolio_value_before
+        return reward
+    
 
     def _step(self, action: int) -> ts.TimeStep:
         if self._episode_ended:
             return self.reset()
+        
+        # --- 1. Decode action and check for validity ---
+        crypto_index = action // len(TradeType)
+        trade_type = TradeType(action % len(TradeType))
+        symbol = self._symbols[crypto_index]
+        
+        is_valid_action = self._is_valid_action(trade_type, symbol)
+        if not is_valid_action:
+            trade_type = TradeType.HOLD
 
-        # --- 1. Get current state and decode action ---
+        # --- 2. Calculate the reward BEFORE changing the state ---
+        pnl_reward = self._calculate_pnl_reward(self._current_step_index, trade_type, symbol)
+
+        # --- 3. Execute the effective trade to update the REAL state ---
         current_prices = self._price_data.iloc[self._current_step_index]
-        asset_value_before = self._calculate_asset_value(self._current_step_index)
-        portfolio_value_before = asset_value_before + self._cash_balance
-
-        crypto_index = action // len(TradeType)         # 0: BTC, 1: ETH, 2: SOL, etc.
-        trade_type = TradeType(action % len(TradeType)) # Use the Enum for clarity
-        symbol_to_trade = self._symbols[crypto_index]
-
-        # --- 2. Check if the action is valid and override if not ---
-        is_valid_action = True
-        if trade_type == TradeType.BUY and self._cash_balance < self._trade_size:
-            # Not enough cash to buy, override to HOLD
-            trade_type = TradeType.HOLD
-            is_valid_action = False
-        elif trade_type == TradeType.SELL and self._asset_holdings[symbol_to_trade] <= 0:
-            # No assets to sell, override to HOLD
-            trade_type = TradeType.HOLD
-            is_valid_action = False
-
-        # --- 3. Execute the (potentially overridden) trade ---
+        trade_history_amount = 0.0
+        
         if trade_type == TradeType.BUY:
-            # The total cash cost of the trade is self._trade_size
-            fee_amount_cash = self._trade_size * self._trade_fee
-
-            # The amount of cash actually used to buy the crypto is reduced by the fee
-            net_purchase_value_cash = self._trade_size - fee_amount_cash
-
-            # Convert the net USD value into a crypto quantity
-            amount_to_buy_crypto = net_purchase_value_cash / current_prices[symbol_to_trade]
-
-            # Update portfolio
-            self._asset_holdings[symbol_to_trade] += amount_to_buy_crypto
-            self._cash_balance -= self._trade_size # Total cash outlay is the full trade size
-
+            fee = self._trade_size * self._trade_fee
+            net_purchase = self._trade_size - fee
+            amount_bought = net_purchase / current_prices[symbol]
+            self._asset_holdings[symbol] += amount_bought
+            self._cash_balance -= self._trade_size
             trade_history_amount = self._trade_size
-
         elif trade_type == TradeType.SELL:
-            # We sell all holdings of this asset
-            amount_to_sell_crypto = self._asset_holdings[symbol_to_trade]
-            total_sale_value_cash = amount_to_sell_crypto * current_prices[symbol_to_trade]
+            amount_sold = self._asset_holdings[symbol]
+            sale_value = amount_sold * current_prices[symbol]
+            fee = sale_value * self._trade_fee
+            self._cash_balance += sale_value - fee
+            self._asset_holdings[symbol] = 0.0
+            trade_history_amount = sale_value
 
-            fee_amount_cash = total_sale_value_cash * self._trade_fee
-
-            # The cash received is the total sale value minus the fee
-            net_proceeds_cash = total_sale_value_cash - fee_amount_cash
-
-            # Update portfolio
-            self._cash_balance += net_proceeds_cash
-            self._asset_holdings[symbol_to_trade] = 0.0
-
-            trade_history_amount = total_sale_value_cash
-
-        else:
-            trade_history_amount = 0.0
-
-
-        # --- 4. Advance time and calculate the new portfolio value ---
+        # --- 4. Advance time and update history ---
         self._current_step_index += 1
         asset_value_after = self._calculate_asset_value(self._current_step_index)
-        portfolio_value_after = asset_value_after + self._cash_balance
-
-        # --- 5. Update balance history and trade history ---
         self._balance_history.append(self._cash_balance)
         self._asset_value_history.append(asset_value_after)
-        self._trade_history.append((symbol_to_trade, int(is_valid_action), trade_type, trade_history_amount))
+        self._trade_history.append((symbol, int(is_valid_action), trade_type, trade_history_amount))
 
-        # --- 6. Calculate reward based on portfolio value change ---
-        reward = (portfolio_value_after - portfolio_value_before) / portfolio_value_before
-
+        # --- 5. Finalize the reward with any penalties ---
+        final_reward = pnl_reward
         if not is_valid_action:
-            reward += self._invalid_action_penalty
+            final_reward += self._invalid_action_penalty
 
-        # --- 7. Check for end of episode ---
+        # --- 6. Check for end of episode and return ---
         if self._current_step_index >= len(self._obs_data) - 1:
             self._episode_ended = True
 
-        # --- 8. Return TimeStep ---
         if self._episode_ended:
-            return ts.termination(self._get_observation(), reward=reward)
+            return ts.termination(self._get_observation(), reward=final_reward)
         else:
-            return ts.transition(self._get_observation(), reward=reward, discount=1.0)
+            return ts.transition(self._get_observation(), reward=final_reward, discount=1.0)
+        
+
+    def optimal_reward_oracle(self, trajectory) -> np.float32:
+        """
+        Calculates the best possible reward for the current step by looking ahead.
+        This "perfect foresight" oracle is used for calculating regret.
+        """
+        # We can't look one step into the future.
+        if trajectory.is_last():
+            return 0.0
+        
+        current_step = self._current_step_index
+        all_possible_rewards = []
+        num_actions = self.action_spec().maximum + 1
+        
+        for action in range(num_actions):
+            crypto_index = action // len(TradeType)
+            trade_type = TradeType(action % len(TradeType))
+            symbol = self._symbols[crypto_index]
+            
+            if not self._is_valid_action(trade_type, symbol):
+                reward = self._calculate_pnl_reward(current_step, TradeType.HOLD, symbol) + self._invalid_action_penalty
+            else:
+                reward = self._calculate_pnl_reward(current_step, trade_type, symbol)
+
+            all_possible_rewards.append(reward)
+        
+        return np.max(all_possible_rewards).astype(np.float32)
