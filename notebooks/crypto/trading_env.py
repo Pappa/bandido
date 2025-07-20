@@ -201,7 +201,6 @@ class CryptoTradingEnvironment(BaseCryptoTradingEnvironment):
         return np.concatenate([market_features, portfolio_features]).astype(np.float32)
 
     def _calculate_asset_value(self, step_index: int) -> float:
-        """Helper function to calculate the total value of the portfolio."""
         current_prices = self._price_data.iloc[step_index]
         asset_values = self._asset_holdings * current_prices
         return asset_values.sum()
