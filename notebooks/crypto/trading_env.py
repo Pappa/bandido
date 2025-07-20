@@ -224,32 +224,57 @@ class CryptoTradingEnvironment(BaseCryptoTradingEnvironment):
         asset_value_before = self._calculate_asset_value(self._current_step_index)
         portfolio_value_before = asset_value_before + self._cash_balance
 
-        crypto_index = action // len(TradeType)   # 0: BTC, 1: ETH, 2: SOL, etc.
-        trade_type_idx = action % len(TradeType)  # 0: BUY, 1: HOLD, 2: SELL
+        crypto_index = action // len(TradeType)         # 0: BTC, 1: ETH, 2: SOL, etc.
+        trade_type = TradeType(action % len(TradeType)) # Use the Enum for clarity
         symbol_to_trade = self._symbols[crypto_index]
 
         # --- 2. Check if the action is valid and override if not ---
         is_valid_action = True
-        if trade_type_idx == TradeType.BUY and self._cash_balance < self._trade_size:
+        if trade_type == TradeType.BUY and self._cash_balance < self._trade_size:
             # Not enough cash to buy, override to HOLD
-            trade_type_idx = TradeType.HOLD
+            trade_type = TradeType.HOLD
             is_valid_action = False
-        elif trade_type_idx == TradeType.SELL and self._asset_holdings[symbol_to_trade] <= 0:
+        elif trade_type == TradeType.SELL and self._asset_holdings[symbol_to_trade] <= 0:
             # No assets to sell, override to HOLD
-            trade_type_idx = TradeType.HOLD
+            trade_type = TradeType.HOLD
             is_valid_action = False
 
         # --- 3. Execute the (potentially overridden) trade ---
-        amount_to_trade = 0.0
-        if trade_type_idx == TradeType.BUY:  # BUY
-            amount_to_trade = self._trade_size / current_prices[symbol_to_trade]
-            self._asset_holdings[symbol_to_trade] += amount_to_trade
-            self._cash_balance -= self._trade_size
-        elif trade_type_idx == TradeType.SELL:  # SELL (sell all holdings of this asset)
-            amount_to_trade = self._asset_holdings[symbol_to_trade]
-            self._cash_balance += amount_to_trade * current_prices[symbol_to_trade]
+        if trade_type == TradeType.BUY:
+            # The total cash cost of the trade is self._trade_size
+            fee_amount_cash = self._trade_size * self._trade_fee
+
+            # The amount of cash actually used to buy the crypto is reduced by the fee
+            net_purchase_value_cash = self._trade_size - fee_amount_cash
+
+            # Convert the net USD value into a crypto quantity
+            amount_to_buy_crypto = net_purchase_value_cash / current_prices[symbol_to_trade]
+
+            # Update portfolio
+            self._asset_holdings[symbol_to_trade] += amount_to_buy_crypto
+            self._cash_balance -= self._trade_size # Total cash outlay is the full trade size
+
+            trade_history_amount = self._trade_size
+
+        elif trade_type == TradeType.SELL:
+            # We sell all holdings of this asset
+            amount_to_sell_crypto = self._asset_holdings[symbol_to_trade]
+            total_sale_value_cash = amount_to_sell_crypto * current_prices[symbol_to_trade]
+
+            fee_amount_cash = total_sale_value_cash * self._trade_fee
+
+            # The cash received is the total sale value minus the fee
+            net_proceeds_cash = total_sale_value_cash - fee_amount_cash
+
+            # Update portfolio
+            self._cash_balance += net_proceeds_cash
             self._asset_holdings[symbol_to_trade] = 0.0
-        # For HOLD (trade_type_idx == 1), do nothing.
+
+            trade_history_amount = total_sale_value_cash
+
+        else:
+            trade_history_amount = 0.0
+
 
         # --- 4. Advance time and calculate the new portfolio value ---
         self._current_step_index += 1
@@ -259,19 +284,19 @@ class CryptoTradingEnvironment(BaseCryptoTradingEnvironment):
         # --- 5. Update balance history and trade history ---
         self._balance_history.append(self._cash_balance)
         self._asset_value_history.append(asset_value_after)
-        self._trade_history.append((symbol_to_trade, int(is_valid_action), trade_type_idx, amount_to_trade))
+        self._trade_history.append((symbol_to_trade, int(is_valid_action), trade_type, trade_history_amount))
 
-        # --- 5. Calculate reward based on portfolio value change ---
+        # --- 6. Calculate reward based on portfolio value change ---
         reward = (portfolio_value_after - portfolio_value_before) / portfolio_value_before
 
         if not is_valid_action:
             reward += self._invalid_action_penalty
 
-        # --- 6. Check for end of episode ---
+        # --- 7. Check for end of episode ---
         if self._current_step_index >= len(self._obs_data) - 1:
             self._episode_ended = True
 
-        # --- 7. Return TimeStep ---
+        # --- 8. Return TimeStep ---
         if self._episode_ended:
             return ts.termination(self._get_observation(), reward=reward)
         else:
