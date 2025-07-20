@@ -19,4 +19,4 @@ build-backend = "hatchling.build"
 
 [dependency-groups]
 # dev = ["ipykernel==6.29.5"]
-dev = ["ccxt>=4.4.91", "ipykernel==6.29.5"]
+dev = ["ccxt>=4.4.95", "ipykernel==6.29.5"]

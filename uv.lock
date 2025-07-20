@@ -158,7 +158,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "ccxt", specifier = ">=4.4.91" },
+    { name = "ccxt", specifier = ">=4.4.95" },
     { name = "ipykernel", specifier = "==6.29.5" },
 ]
 
