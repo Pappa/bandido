@@ -11,6 +11,7 @@ class TradeType(Enum):
     BUY  = 0
     HOLD = 1
     SELL = 2
+
     def __eq__(self, other):
         if isinstance(other, int):
             return self.value == other
@@ -18,6 +19,9 @@ class TradeType(Enum):
             return self.value == other.value
         else:
             return False
+
+    def __str__(self):
+        return self.name
 
 class BaseCryptoTradingEnvironment(py_environment.PyEnvironment):
     """
@@ -86,9 +90,17 @@ class BaseCryptoTradingEnvironment(py_environment.PyEnvironment):
 
     def _reset(self) -> ts.TimeStep:
         """Resets the environment to the first time step."""
+        print("Resetting the environment.")
         self._current_step_index = 0
         self._episode_ended = False
         return ts.restart(self._get_observation())
+
+    def _decode_action(self, action: int) -> tuple[str, TradeType]:
+        """Decodes the action into a symbol and trade type."""
+        crypto_index = action // len(TradeType)
+        trade_type = TradeType(action % len(TradeType))
+        symbol = self._symbols[crypto_index]
+        return symbol, trade_type
 
     def _step(self, action: int) -> ts.TimeStep:
         """Applies an action, calculates the reward, and steps the environment."""
@@ -96,21 +108,18 @@ class BaseCryptoTradingEnvironment(py_environment.PyEnvironment):
             return self.reset()
 
         # Decode the action to find the symbol and trade type
-        crypto_index = action // len(TradeType)   # 0: BTC, 1: ETH, 2: SOL, etc.
-        trade_type_idx = action % len(TradeType)  # 0: BUY, 1: HOLD, 2: SELL
+        symbol, trade_type = self._decode_action(action)
 
         # Calculate the reward
         reward = 0.0
-        if trade_type_idx != TradeType.HOLD:  # No reward for HOLD
-            symbol = self._symbols[crypto_index]
-
+        if trade_type != TradeType.HOLD:  # No reward for HOLD
             # Use the dedicated prices DataFrame for a fast lookup
             current_price = self._price_data.iloc[self._current_step_index][symbol]
             next_price = self._price_data.iloc[self._current_step_index + 1][symbol]
 
-            if trade_type_idx == TradeType.BUY:  # BUY
+            if trade_type == TradeType.BUY:  # BUY
                 reward = (next_price - current_price) / current_price
-            elif trade_type_idx == TradeType.SELL:  # SELL
+            elif trade_type == TradeType.SELL:  # SELL
                 reward = (current_price - next_price) / current_price
 
         # Advance the environment state
@@ -189,7 +198,7 @@ class CryptoTradingEnvironment(BaseCryptoTradingEnvironment):
         normalized_cash = self._cash_balance / self._seed_fund
         current_prices = self._price_data.iloc[self._current_step_index]
         total_value = self._calculate_asset_value(self._current_step_index) + self._cash_balance
-        
+
         if total_value == 0:
             # Handle edge case at the beginning or if bankrupt
             normalized_holdings = np.zeros(self._num_cryptos)
@@ -200,95 +209,60 @@ class CryptoTradingEnvironment(BaseCryptoTradingEnvironment):
         portfolio_features = np.append(normalized_holdings, normalized_cash)
         return np.concatenate([market_features, portfolio_features]).astype(np.float32)
 
+
+    def _reset(self) -> ts.TimeStep:
+        """Resets the environment, including the portfolio."""
+        # Reset the child-specific state (the portfolio)
+        print("Resetting the environment, including the portfolio.")
+        self._cash_balance = self._seed_fund
+        self._asset_holdings = pd.Series(0.0, index=self._symbols)
+        self._balance_history = [self._seed_fund]
+        self._asset_value_history = [0]
+        self._trade_history = []
+        return super()._reset()
+
     def _calculate_asset_value(self, step_index: int) -> float:
         current_prices = self._price_data.iloc[step_index]
         asset_values = self._asset_holdings * current_prices
         return asset_values.sum()
-    
-    
-    def _is_valid_action(self, trade_type: TradeType, symbol: str) -> bool:
+
+
+    def _is_valid_action(self, symbol: str, trade_type: TradeType) -> bool:
         if trade_type == TradeType.BUY and self._cash_balance < self._trade_size:
             return False
         elif trade_type == TradeType.SELL and self._asset_holdings[symbol] <= 0:
             return False
         return True
-    
 
-    def _calculate_pnl_reward(self, step_index: int, trade_type: TradeType, symbol: str) -> float:
-        """
-        Calculates the P&L reward for a given action at a specific step_index,
-        accounting for trade fees. This is a simulation and does NOT change the
-        environment's actual portfolio state.
-        """
-        # 1. No reward for HOLD
-        if trade_type == TradeType.HOLD:
-            return 0.0
-        
-        # 2. Get initial state for simulation
-        current_prices = self._price_data.iloc[step_index]
-        portfolio_value_before = self._calculate_asset_value(step_index) + self._cash_balance
-
-        # 3. Simulate the trade to get the hypothetical next-step portfolio
-        temp_cash = self._cash_balance
-        temp_holdings = self._asset_holdings.copy()
-
-        if trade_type == TradeType.BUY:
-            fee = self._trade_size * self._trade_fee
-            net_purchase_value = self._trade_size - fee
-            amount_bought = net_purchase_value / current_prices[symbol]
-            temp_holdings[symbol] += amount_bought
-            temp_cash -= self._trade_size
-            
-        elif trade_type == TradeType.SELL:
-            amount_to_sell = temp_holdings[symbol]
-            if amount_to_sell > 0:
-                total_sale_value = amount_to_sell * current_prices[symbol]
-                fee = total_sale_value * self._trade_fee
-                net_proceeds = total_sale_value - fee
-                temp_cash += net_proceeds
-                temp_holdings[symbol] = 0.0
-
-        # 4. Calculate the portfolio value at the *next* time step
-        next_prices = self._price_data.iloc[step_index + 1]
-        simulated_asset_value_after = (temp_holdings * next_prices).sum()
-        simulated_portfolio_value_after = simulated_asset_value_after + temp_cash
-
-        # 5. Return the percentage change (the reward)
-        # Avoid division by zero if portfolio value is 0
-        if portfolio_value_before == 0:
-            return 0.0
-        reward = (simulated_portfolio_value_after - portfolio_value_before) / portfolio_value_before
-        return reward
-    
 
     def _step(self, action: int) -> ts.TimeStep:
         if self._episode_ended:
             return self.reset()
-        
-        # --- 1. Decode action and check for validity ---
-        crypto_index = action // len(TradeType)
-        trade_type = TradeType(action % len(TradeType))
-        symbol = self._symbols[crypto_index]
-        
-        is_valid_action = self._is_valid_action(trade_type, symbol)
+
+        # --- 1. Get portfolio value BEFORE the trade ---
+        portfolio_value_before = self._calculate_portfolio_value(self._current_step_index)
+
+        # --- 2. Decode action and determine the EFFECTIVE action ---
+        symbol, intended_trade_type = self._decode_action(action)
+        effective_trade_type = intended_trade_type
+
+        is_valid_action = self._is_valid_action(symbol, intended_trade_type)
+
         if not is_valid_action:
-            trade_type = TradeType.HOLD
+            effective_trade_type = TradeType.HOLD # Override to the actual executed action
 
-        # --- 2. Calculate the reward BEFORE changing the state ---
-        pnl_reward = self._calculate_pnl_reward(self._current_step_index, trade_type, symbol)
-
-        # --- 3. Execute the effective trade to update the REAL state ---
+        # --- 3. Execute the EFFECTIVE trade to update the REAL state ---
         current_prices = self._price_data.iloc[self._current_step_index]
         trade_history_amount = 0.0
-        
-        if trade_type == TradeType.BUY:
+
+        if effective_trade_type == TradeType.BUY:
             fee = self._trade_size * self._trade_fee
             net_purchase = self._trade_size - fee
             amount_bought = net_purchase / current_prices[symbol]
             self._asset_holdings[symbol] += amount_bought
             self._cash_balance -= self._trade_size
             trade_history_amount = self._trade_size
-        elif trade_type == TradeType.SELL:
+        elif effective_trade_type == TradeType.SELL:
             amount_sold = self._asset_holdings[symbol]
             sale_value = amount_sold * current_prices[symbol]
             fee = sale_value * self._trade_fee
@@ -296,27 +270,38 @@ class CryptoTradingEnvironment(BaseCryptoTradingEnvironment):
             self._asset_holdings[symbol] = 0.0
             trade_history_amount = sale_value
 
-        # --- 4. Advance time and update history ---
+        # --- 4. Advance time and get portfolio value AFTER the trade ---
         self._current_step_index += 1
+        portfolio_value_after = self._calculate_portfolio_value(self._current_step_index)
+
+        # --- 5. Calculate the reward based on the REAL change in portfolio value ---
+        if portfolio_value_before == 0:
+            pnl_reward = 0.0
+        else:
+            pnl_reward = (portfolio_value_after - portfolio_value_before) / portfolio_value_before
+
+        # Apply the invalid action penalty if the action is invalid
+        if is_valid_action:
+            final_reward = pnl_reward
+        else:
+            final_reward = pnl_reward + self._invalid_action_penalty
+
+
+        # --- 6. Update history and check for end of episode ---
         asset_value_after = self._calculate_asset_value(self._current_step_index)
         self._balance_history.append(self._cash_balance)
         self._asset_value_history.append(asset_value_after)
-        self._trade_history.append((symbol, int(is_valid_action), trade_type, trade_history_amount))
+        self._trade_history.append((symbol, int(is_valid_action), effective_trade_type.name, trade_history_amount))
 
-        # --- 5. Finalize the reward with any penalties ---
-        final_reward = pnl_reward
-        if not is_valid_action:
-            final_reward += self._invalid_action_penalty
-
-        # --- 6. Check for end of episode and return ---
         if self._current_step_index >= len(self._obs_data) - 1:
             self._episode_ended = True
 
+        # --- 7. Return TimeStep ---
         if self._episode_ended:
             return ts.termination(self._get_observation(), reward=final_reward)
         else:
             return ts.transition(self._get_observation(), reward=final_reward, discount=1.0)
-        
+
 
     def optimal_reward_oracle(self, trajectory) -> np.float32:
         """
@@ -326,21 +311,51 @@ class CryptoTradingEnvironment(BaseCryptoTradingEnvironment):
         # We can't look one step into the future.
         if trajectory.is_last():
             return 0.0
-        
-        current_step = self._current_step_index
+
         all_possible_rewards = []
         num_actions = self.action_spec().maximum + 1
-        
-        for action in range(num_actions):
-            crypto_index = action // len(TradeType)
-            trade_type = TradeType(action % len(TradeType))
-            symbol = self._symbols[crypto_index]
-            
-            if not self._is_valid_action(trade_type, symbol):
-                reward = self._calculate_pnl_reward(current_step, TradeType.HOLD, symbol) + self._invalid_action_penalty
-            else:
-                reward = self._calculate_pnl_reward(current_step, trade_type, symbol)
 
-            all_possible_rewards.append(reward)
-        
+        for action in range(num_actions):
+            # Simulate the P&L for each possible action
+            # This is a simplified version of the logic in the old _calculate_pnl_reward
+            portfolio_value_before = self._calculate_portfolio_value(self._current_step_index)
+            temp_cash = self._cash_balance
+            temp_holdings = self._asset_holdings.copy()
+            current_prices = self._price_data.iloc[self._current_step_index]
+
+            symbol, trade_type = self._decode_action(action)
+            is_valid_action = self._is_valid_action(symbol, trade_type)
+
+            # Use the actual executed trade type for the simulation
+            effective_trade_type = trade_type
+
+            if not is_valid_action:
+                effective_trade_type = TradeType.HOLD
+
+            if effective_trade_type == TradeType.BUY:
+                fee = self._trade_size * self._trade_fee
+                net_purchase = self._trade_size - fee
+                amount_bought = net_purchase / current_prices[symbol]
+                temp_holdings[symbol] += amount_bought
+                temp_cash -= self._trade_size
+            elif effective_trade_type == TradeType.SELL:
+                amount_sold = temp_holdings[symbol]
+                sale_value = amount_sold * current_prices[symbol]
+                fee = sale_value * self._trade_fee
+                temp_cash += sale_value - fee
+                temp_holdings[symbol] = 0.0
+
+            next_prices = self._price_data.iloc[self._current_step_index + 1]
+            portfolio_value_after = (temp_holdings * next_prices).sum() + temp_cash
+
+            pnl_reward = (portfolio_value_after - portfolio_value_before) / portfolio_value_before if portfolio_value_before else 0.0
+
+            # Apply the invalid action penalty if the action is invalid
+            if is_valid_action:
+                final_reward = pnl_reward
+            else:
+                final_reward = pnl_reward + self._invalid_action_penalty
+
+            all_possible_rewards.append(final_reward)
+
         return np.max(all_possible_rewards).astype(np.float32)
