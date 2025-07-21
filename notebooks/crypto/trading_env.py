@@ -336,6 +336,7 @@ class CryptoTradingEnvironment(BaseCryptoTradingEnvironment):
 
             if not is_valid_action:
                 effective_trade_type = TradeType.HOLD
+                trade_amount = 0.0
 
             if effective_trade_type == TradeType.BUY:
                 fee = self._trade_size * self._trade_fee
@@ -343,14 +344,14 @@ class CryptoTradingEnvironment(BaseCryptoTradingEnvironment):
                 amount_bought = net_purchase / current_prices[symbol]
                 holdings[symbol] += amount_bought
                 cash -= self._trade_size
-                trade_history_amount = self._trade_size
+                trade_amount = self._trade_size
             elif effective_trade_type == TradeType.SELL:
                 amount_sold = holdings[symbol]
                 sale_value = amount_sold * current_prices[symbol]
                 fee = sale_value * self._trade_fee
                 cash += sale_value - fee
                 holdings[symbol] = 0.0
-                trade_history_amount = sale_value
+                trade_amount = sale_value
 
             next_prices = self._price_data.iloc[self._current_step_index + 1]
             portfolio_value_after = (holdings * next_prices).sum() + cash
@@ -365,7 +366,7 @@ class CryptoTradingEnvironment(BaseCryptoTradingEnvironment):
                 reward += self._invalid_action_penalty
 
             possible_rewards.append(reward)
-            possible_trades.append(trade_history_amount)
+            possible_trades.append(trade_amount)
 
         optimal_action = np.argmax(possible_rewards)
         optimal_symbol, optimal_trade_type = self._decode_action(optimal_action)
