@@ -90,7 +90,6 @@ class BaseCryptoTradingEnvironment(py_environment.PyEnvironment):
 
     def _reset(self) -> ts.TimeStep:
         """Resets the environment to the first time step."""
-        print("Resetting the environment.")
         self._current_step_index = 0
         self._episode_ended = False
         return ts.restart(self._get_observation())
@@ -218,7 +217,6 @@ class CryptoTradingEnvironment(BaseCryptoTradingEnvironment):
     def _reset(self) -> ts.TimeStep:
         """Resets the environment, including the portfolio."""
         # Reset the child-specific state (the portfolio)
-        print("Resetting the environment, including the portfolio.")
         self._cash_balance = self._seed_fund
         self._asset_holdings = pd.Series(0.0, index=self._symbols)
         self._balance_history = [self._seed_fund]
