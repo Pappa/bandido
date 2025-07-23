@@ -267,11 +267,12 @@ class CryptoTradingEnvironment(BaseCryptoTradingEnvironment):
             self._cash_balance -= self._trade_size
             trade_value = self._trade_size
         elif effective_trade_type == TradeType.SELL:
-            amount_sold = self._asset_holdings[symbol_idx]
+            current_holdings = self._asset_holdings[symbol_idx]
+            amount_sold = np.min([np.max([int(current_holdings / 2), self._trade_size]), current_holdings])
             sale_value = amount_sold * current_prices[symbol_idx]
             fee = sale_value * self._trade_fee
             self._cash_balance += sale_value - fee
-            self._asset_holdings[symbol_idx] = 0.0
+            self._asset_holdings[symbol_idx] -= amount_sold
             trade_value = sale_value
 
         # --- 4. Advance time and get portfolio value AFTER the trade ---
@@ -357,11 +358,12 @@ class CryptoTradingEnvironment(BaseCryptoTradingEnvironment):
                 cash -= self._trade_size
                 trade_amount = self._trade_size
             elif effective_trade_type == TradeType.SELL:
-                amount_sold = holdings[symbol_idx]
+                current_holdings = holdings[symbol_idx]
+                amount_sold = np.min([np.max([int(current_holdings / 2), self._trade_size]), current_holdings])
                 sale_value = amount_sold * current_prices[symbol_idx]
                 fee = sale_value * self._trade_fee
                 cash += sale_value - fee
-                holdings[symbol_idx] = 0.0
+                holdings[symbol_idx] -= amount_sold
                 trade_amount = sale_value
 
             portfolio_value_after = (holdings * next_prices).sum() + cash
