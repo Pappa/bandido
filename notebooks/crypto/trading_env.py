@@ -141,13 +141,14 @@ class CryptoTradingEnvironment(BaseCryptoTradingEnvironment):
     - Overrides impossible actions (e.g., selling what you don't own).
     - Calculates reward based on the change in total portfolio value.
     """
-    def __init__(self, observation_df: pd.DataFrame, prices_df: pd.DataFrame, symbols: list[str], seed_fund: float = 100.0, trade_size: float = 20.0, trade_fee: float = 0.005, invalid_action_penalty: float = -0.001):
+    def __init__(self, observation_df: pd.DataFrame, prices_df: pd.DataFrame, symbols: list[str], seed_fund: float = 100.0, max_buy_price: float = 20.0, max_sell_price: float = 40.0, trade_fee: float = 0.005, invalid_action_penalty: float = -0.001):
 
         super().__init__(observation_df, prices_df, symbols)
 
         # --- Portfolio State ---
         self._seed_fund = seed_fund
-        self._trade_size = trade_size
+        self._max_buy_price = max_buy_price
+        self._max_sell_price = max_sell_price
         self._trade_fee = trade_fee
         self._invalid_action_penalty = invalid_action_penalty
         self._cash_balance = seed_fund
@@ -223,7 +224,7 @@ class CryptoTradingEnvironment(BaseCryptoTradingEnvironment):
 
 
     def _is_valid_action(self, symbol_idx: int, trade_type: TradeType) -> bool:
-        if trade_type == TradeType.BUY and self._cash_balance < self._trade_size:
+        if trade_type == TradeType.BUY and self._cash_balance < self._max_buy_price:
             return False
         elif trade_type == TradeType.SELL and self._asset_holdings[symbol_idx] <= 0.0:
             return False
@@ -251,15 +252,15 @@ class CryptoTradingEnvironment(BaseCryptoTradingEnvironment):
         trade_value = 0.0
 
         if effective_trade_type == TradeType.BUY:
-            fee = self._trade_size * self._trade_fee
-            net_purchase = self._trade_size - fee
+            fee = self._max_buy_price * self._trade_fee
+            net_purchase = self._max_buy_price - fee
             amount_bought = net_purchase / current_prices[symbol_idx]
             self._asset_holdings[symbol_idx] += amount_bought
-            self._cash_balance -= self._trade_size
-            trade_value = self._trade_size
+            self._cash_balance -= self._max_buy_price
+            trade_value = self._max_buy_price
         elif effective_trade_type == TradeType.SELL:
             current_holdings = self._asset_holdings[symbol_idx]
-            max_sell_amount = self._trade_size / current_prices[symbol_idx]
+            max_sell_amount = self._max_sell_price / current_prices[symbol_idx]
             amount_sold = np.min([max_sell_amount, current_holdings])
             sale_value = amount_sold * current_prices[symbol_idx]
             fee = sale_value * self._trade_fee
@@ -341,15 +342,15 @@ class CryptoTradingEnvironment(BaseCryptoTradingEnvironment):
             holdings = self._asset_holdings.copy()
 
             if effective_trade_type == TradeType.BUY:
-                fee = self._trade_size * self._trade_fee
-                net_purchase = self._trade_size - fee
+                fee = self._max_buy_price * self._trade_fee
+                net_purchase = self._max_buy_price - fee
                 amount_bought = net_purchase / current_prices[symbol_idx]
                 holdings[symbol_idx] += amount_bought
-                cash -= self._trade_size
-                trade_amount = self._trade_size
+                cash -= self._max_buy_price
+                trade_amount = self._max_buy_price
             elif effective_trade_type == TradeType.SELL:
                 current_holdings = holdings[symbol_idx]
-                max_sell_amount = self._trade_size / current_prices[symbol_idx]
+                max_sell_amount = self._max_sell_price / current_prices[symbol_idx]
                 amount_sold = np.min([max_sell_amount, current_holdings])
                 sale_value = amount_sold * current_prices[symbol_idx]
                 fee = sale_value * self._trade_fee
