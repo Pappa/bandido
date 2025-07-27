@@ -97,8 +97,9 @@ def calculate_macd(df: pd.DataFrame, short_window: int = 12, long_window: int = 
 
     # --- Step 4: Calculate the MACD Histogram ---
     data['macd_hist'] = data['macd'] - data['macd_signal']
+    data['macd_hist_prev'] = data['macd_hist'].shift(1)
         
-    return data[['macd', 'macd_signal', 'macd_hist']]
+    return data[['macd', 'macd_signal', 'macd_hist', 'macd_hist_prev']]
 
 
 def calculate_bollinger_bands(df: pd.DataFrame, window: int = 20, num_std: int = 2) -> pd.DataFrame:

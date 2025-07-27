@@ -106,13 +106,11 @@ class BaseCryptoTradingEnvironment(py_environment.PyEnvironment):
         if self._episode_ended:
             return self.reset()
 
-        # Decode the action to find the symbol and trade type
         symbol_idx, symbol, trade_type = self._decode_action(action)
 
         # Calculate the reward
         reward = 0.0
         if trade_type != TradeType.HOLD:  # No reward for HOLD
-            # Use the dedicated prices DataFrame for a fast lookup
             current_price = self._price_data[self._current_step_index, symbol_idx]
             next_price = self._price_data[self._current_step_index + 1, symbol_idx]
 
@@ -153,11 +151,9 @@ class CryptoTradingEnvironment(BaseCryptoTradingEnvironment):
         self._trade_fee = trade_fee
         self._invalid_action_penalty = invalid_action_penalty
         self._cash_balance = seed_fund
-        self._balance_history = [seed_fund]
-        self._trade_history = []
-        self._optimal_trade_history = []
+        self._last_trade = None
+        self._last_optimal_trade = None
         self._asset_holdings = np.zeros(self._num_cryptos, dtype=np.float32)
-        self._asset_value_history = [0]
 
     def _init_observation_spec(self):
         """
@@ -173,24 +169,21 @@ class CryptoTradingEnvironment(BaseCryptoTradingEnvironment):
         )
 
     @property
-    def balance_history(self):
-        return np.array(self._balance_history)
+    def current_balance(self):
+        return self._cash_balance
 
     @property
-    def asset_value_history(self):
-        return np.array(self._asset_value_history)
+    def current_assets(self):
+        current_prices = self._price_data[self._current_step_index]
+        return (self._asset_holdings * current_prices).sum()
 
     @property
-    def portfolio_value_history(self):
-        return np.array(self._balance_history) + np.array(self._asset_value_history)
+    def last_trade(self):
+        return self._last_trade
 
     @property
-    def trade_history(self):
-        return np.array(self._trade_history)
-
-    @property
-    def optimal_trade_history(self):
-        return np.array(self._optimal_trade_history)
+    def last_optimal_trade(self):
+        return self._last_optimal_trade
 
     def _get_observation(self) -> np.ndarray:
         """
@@ -217,11 +210,9 @@ class CryptoTradingEnvironment(BaseCryptoTradingEnvironment):
         """Resets the environment, including the portfolio."""
         # Reset the child-specific state (the portfolio)
         self._cash_balance = self._seed_fund
-        self._balance_history = [self._seed_fund]
         self._asset_holdings = np.zeros(self._num_cryptos, dtype=np.float32)
-        self._asset_value_history = [0]
-        self._trade_history = []
-        self._optimal_trade_history = []
+        self._last_trade = None
+        self._last_optimal_trade = None
 
         return super()._reset()
 
@@ -268,7 +259,8 @@ class CryptoTradingEnvironment(BaseCryptoTradingEnvironment):
             trade_value = self._trade_size
         elif effective_trade_type == TradeType.SELL:
             current_holdings = self._asset_holdings[symbol_idx]
-            amount_sold = np.min([np.max([int(current_holdings / 2), self._trade_size]), current_holdings])
+            max_sell_amount = self._trade_size / current_prices[symbol_idx]
+            amount_sold = np.min([max_sell_amount, current_holdings])
             sale_value = amount_sold * current_prices[symbol_idx]
             fee = sale_value * self._trade_fee
             self._cash_balance += sale_value - fee
@@ -291,14 +283,12 @@ class CryptoTradingEnvironment(BaseCryptoTradingEnvironment):
 
         # --- 6. Update history and check for end of episode ---
         asset_value_after = self._calculate_portfolio_value(self._current_step_index)
-        self._balance_history.append(self._cash_balance)
-        self._asset_value_history.append(asset_value_after)
-        self._trade_history.append((symbol, int(is_valid_action), effective_trade_type.name, trade_value, reward))
+        self._last_trade = (symbol, int(is_valid_action), effective_trade_type.name, trade_value, reward)
 
         if self._current_step_index >= len(self._obs_data) - 1:
             self._episode_ended = True
 
-        # --- 7. Return TimeStep ---
+        # --- 7. Return TimeStep ---.
         if self._episode_ended:
             return ts.termination(self._get_observation(), reward=reward)
         else:
@@ -359,7 +349,8 @@ class CryptoTradingEnvironment(BaseCryptoTradingEnvironment):
                 trade_amount = self._trade_size
             elif effective_trade_type == TradeType.SELL:
                 current_holdings = holdings[symbol_idx]
-                amount_sold = np.min([np.max([int(current_holdings / 2), self._trade_size]), current_holdings])
+                max_sell_amount = self._trade_size / current_prices[symbol_idx]
+                amount_sold = np.min([max_sell_amount, current_holdings])
                 sale_value = amount_sold * current_prices[symbol_idx]
                 fee = sale_value * self._trade_fee
                 cash += sale_value - fee
@@ -381,6 +372,6 @@ class CryptoTradingEnvironment(BaseCryptoTradingEnvironment):
         optimal_trade_amount = possible_trades[optimal_action]
         optimal_reward = possible_rewards[optimal_action]
 
-        self._optimal_trade_history.append((optimal_symbol, optimal_trade_type.name, optimal_trade_amount, optimal_reward))
-
+        self._last_optimal_trade = (optimal_symbol, optimal_trade_type.name, optimal_trade_amount, optimal_reward)
+    
         return np.float32(optimal_reward)
