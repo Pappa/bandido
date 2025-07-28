@@ -35,7 +35,7 @@ class MetricsObserver:
             self._balance_history.append(current_balance)
             self._asset_value_history.append(current_assets)
             
-            optimal_reward = self._env.optimal_reward_oracle(trajectory)
+            optimal_reward = self._env.oracle(trajectory)
             regret = optimal_reward - reward
             
             self._optimal_rewards.append(optimal_reward)

@@ -154,6 +154,7 @@ class CryptoTradingEnvironment(BaseCryptoTradingEnvironment):
         self._cash_balance = seed_fund
         self._last_trade = None
         self._last_optimal_trade = None
+        self._possible_trades = []
         self._asset_holdings = np.zeros(self._num_cryptos, dtype=np.float32)
 
     def _init_observation_spec(self):
@@ -214,6 +215,7 @@ class CryptoTradingEnvironment(BaseCryptoTradingEnvironment):
         self._asset_holdings = np.zeros(self._num_cryptos, dtype=np.float32)
         self._last_trade = None
         self._last_optimal_trade = None
+        self._possible_trades = []
 
         return super()._reset()
 
@@ -234,128 +236,95 @@ class CryptoTradingEnvironment(BaseCryptoTradingEnvironment):
     def _step(self, action: int) -> ts.TimeStep:
         if self._episode_ended:
             return self.reset()
+                
+        self._calculate_all_possible_trades()
 
-        # --- 1. Get portfolio value BEFORE the trade ---
-        portfolio_value_before = self._calculate_portfolio_value(self._current_step_index)
+        possible_trades = self._possible_trades[self._current_step_index]
 
-        # --- 2. Decode action and determine the EFFECTIVE action ---
-        symbol_idx, symbol, trade_type = self._decode_action(action)
-        effective_trade_type = trade_type
+        # TEMPORARY: Check that the possible trades are the same as the last step.
+        assert possible_trades == self._possible_trades[-1]
 
-        is_valid_action = self._is_valid_action(symbol_idx, trade_type)
+        effective_trade = possible_trades[action]
+        self._last_trade = effective_trade
+        
+        symbol_idx, symbol, trade_type, is_valid_action, num_assets_traded, trade_amount, cash_balance, reward = effective_trade
 
-        if not is_valid_action:
-            effective_trade_type = TradeType.HOLD # Override to the actual executed action
+        if trade_type == TradeType.BUY:
+            self._asset_holdings[symbol_idx] += num_assets_traded
+            self._cash_balance = cash_balance
+        elif trade_type == TradeType.SELL:
+            self._asset_holdings[symbol_idx] -= num_assets_traded
+            self._cash_balance = cash_balance
 
-        # --- 3. Execute the EFFECTIVE trade to update the REAL state ---
-        current_prices = self._price_data[self._current_step_index]
-        trade_value = 0.0
-
-        if effective_trade_type == TradeType.BUY:
-            fee = self._max_buy_price * self._trade_fee
-            net_purchase = self._max_buy_price - fee
-            amount_bought = net_purchase / current_prices[symbol_idx]
-            self._asset_holdings[symbol_idx] += amount_bought
-            self._cash_balance -= self._max_buy_price
-            trade_value = self._max_buy_price
-        elif effective_trade_type == TradeType.SELL:
-            current_holdings = self._asset_holdings[symbol_idx]
-            max_sell_amount = self._max_sell_price / current_prices[symbol_idx]
-            amount_sold = np.min([max_sell_amount, current_holdings])
-            sale_value = amount_sold * current_prices[symbol_idx]
-            fee = sale_value * self._trade_fee
-            self._cash_balance += sale_value - fee
-            self._asset_holdings[symbol_idx] -= amount_sold
-            trade_value = sale_value
-
-        # --- 4. Advance time and get portfolio value AFTER the trade ---
+        # --- Advance time and get portfolio value AFTER the trade ---
         self._current_step_index += 1
-        portfolio_value_after = self._calculate_portfolio_value(self._current_step_index)
-
-        # --- 5. Calculate the reward based on the REAL change in portfolio value ---
-        reward = 0.0
-        if portfolio_value_before > 0:
-            reward = (portfolio_value_after - portfolio_value_before) / portfolio_value_before
-
-        # Apply the invalid action penalty if the action is invalid
-        if not is_valid_action:
-            reward += self._invalid_action_penalty
-
-
-        # --- 6. Update history and check for end of episode ---
-        asset_value_after = self._calculate_portfolio_value(self._current_step_index)
-        self._last_trade = (symbol, int(is_valid_action), effective_trade_type.name, trade_value, reward)
 
         if self._current_step_index >= len(self._obs_data) - 1:
             self._episode_ended = True
 
-        # --- 7. Return TimeStep ---.
+        # --- Return TimeStep ---.
         if self._episode_ended:
             return ts.termination(self._get_observation(), reward=reward)
         else:
             return ts.transition(self._get_observation(), reward=reward, discount=1.0)
 
 
-    def optimal_reward_oracle(self, trajectory) -> np.float32:
+    def _calculate_all_possible_trades(self):
         """
-        Calculates the best possible reward for the current step by looking ahead.
-        This "perfect foresight" oracle is used for calculating regret.
+        Calculates the reward for all possible trades.
         """
-        # We can't look one step into the future.
-        if trajectory.is_last():
-            return 0.0
-
         portfolio_value_before = self._calculate_portfolio_value(self._current_step_index)
         current_prices = self._price_data[self._current_step_index]
         next_prices = self._price_data[self._current_step_index + 1]
-        portfolio_value_after_hold = (self._asset_holdings * next_prices).sum() + self._cash_balance
     
         hold_reward = 0.0
+
         if portfolio_value_before > 0:
+            portfolio_value_after_hold = (self._asset_holdings * next_prices).sum() + self._cash_balance
             hold_reward = (portfolio_value_after_hold - portfolio_value_before) / portfolio_value_before
 
-        possible_rewards = []
         possible_trades = []
         num_actions = self.action_spec().maximum + 1
 
         for action in range(num_actions):
+            reward = 0.0
+            trade_amount = 0.0
+            num_assets_traded = 0.0
+            cash = self._cash_balance
+
             # Simulate the P&L for each possible action
             symbol_idx, symbol, trade_type = self._decode_action(action)
-            effective_trade_type = trade_type
             is_valid_action = self._is_valid_action(symbol_idx, trade_type)
 
-            if effective_trade_type == TradeType.HOLD:
-                possible_rewards.append(hold_reward)
-                possible_trades.append(0.0)
+            if trade_type == TradeType.HOLD:
+                # The reward for a HOLD is always the same.
+                possible_trades.append((symbol_idx, symbol, trade_type, is_valid_action, num_assets_traded, trade_amount, cash, hold_reward))
                 continue
 
             if not is_valid_action:
                 # An invalid action results in a HOLD, plus a penalty.
-                effective_trade_type = TradeType.HOLD
                 reward = hold_reward + self._invalid_action_penalty
-                possible_rewards.append(reward)
-                possible_trades.append(0.0)
+                possible_trades.append((symbol_idx, symbol, TradeType.HOLD, is_valid_action, num_assets_traded, trade_amount, cash, reward))
                 continue
 
             # --- Simulate the trade for a BUY or SELL ---
-            cash = self._cash_balance
             holdings = self._asset_holdings.copy()
 
-            if effective_trade_type == TradeType.BUY:
+            if trade_type == TradeType.BUY:
                 fee = self._max_buy_price * self._trade_fee
                 net_purchase = self._max_buy_price - fee
-                amount_bought = net_purchase / current_prices[symbol_idx]
-                holdings[symbol_idx] += amount_bought
+                num_assets_traded = net_purchase / current_prices[symbol_idx]
+                holdings[symbol_idx] += num_assets_traded
                 cash -= self._max_buy_price
                 trade_amount = self._max_buy_price
-            elif effective_trade_type == TradeType.SELL:
+            elif trade_type == TradeType.SELL:
                 current_holdings = holdings[symbol_idx]
                 max_sell_amount = self._max_sell_price / current_prices[symbol_idx]
-                amount_sold = np.min([max_sell_amount, current_holdings])
-                sale_value = amount_sold * current_prices[symbol_idx]
+                num_assets_traded = np.min([max_sell_amount, current_holdings])
+                sale_value = num_assets_traded * current_prices[symbol_idx]
                 fee = sale_value * self._trade_fee
                 cash += sale_value - fee
-                holdings[symbol_idx] -= amount_sold
+                holdings[symbol_idx] -= num_assets_traded
                 trade_amount = sale_value
 
             portfolio_value_after = (holdings * next_prices).sum() + cash
@@ -365,14 +334,30 @@ class CryptoTradingEnvironment(BaseCryptoTradingEnvironment):
             if portfolio_value_before > 0:
                 reward = (portfolio_value_after - portfolio_value_before) / portfolio_value_before
 
-            possible_rewards.append(reward)
-            possible_trades.append(trade_amount)
+            possible_trades.append((symbol_idx, symbol, trade_type, is_valid_action, num_assets_traded, trade_amount, cash, reward))
 
-        optimal_action = np.argmax(possible_rewards)
-        optimal_symbol_idx, optimal_symbol, optimal_trade_type = self._decode_action(optimal_action)
-        optimal_trade_amount = possible_trades[optimal_action]
-        optimal_reward = possible_rewards[optimal_action]
+        self._possible_trades.append(possible_trades)
+        
 
-        self._last_optimal_trade = (optimal_symbol, optimal_trade_type.name, optimal_trade_amount, optimal_reward)
+
+    def oracle(self, trajectory) -> np.float32:
+        """
+        Calculates the best possible reward for the current step by looking ahead.
+        This "perfect foresight" oracle is used for calculating regret.
+        """
+        # We can't look one step into the future.
+        if trajectory.is_last():
+            return 0.0
+
+        possible_trades = self._possible_trades[self._current_step_index - 1]
+
+        # TEMPORARY: Check that the possible trades are the same as the last step.
+        assert possible_trades == self._possible_trades[-1]
+
+        optimal_action = np.argmax(np.array(possible_trades)[:, -1])
+        optimal_trade = possible_trades[optimal_action]
+        optimal_reward = optimal_trade[-1]
+
+        self._last_optimal_trade = optimal_trade
     
         return np.float32(optimal_reward)
