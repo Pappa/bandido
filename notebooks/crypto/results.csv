@@ -1,0 +1,5 @@
+timestamp,agent,train_steps,eval_steps,alpha,gamma,learming_rate,max_buy_price,max_sell_price,trade_fee,invalid_action_penalty,technical_features,num_technical_features,test_return,eval_return,test_valid_action_rate,eval_valid_action_rate,test_optimal_trade_rate,eval_optimal_trade_rate
+2025-07-28 18:51:23,LinearUCBAgent,2000,1000,1.0,0.95,,25.0,50.0,0.0005,-0.005,price_change|volume_change|rsi|macd_signal|macd_hist,5,16.11,10.88,0.8115,0.378,0.082,0.03
+2025-07-28 18:51:58,NeuralLinUCBAgent,2000,500,1.0,1.0,,25.0,50.0,0.0005,-0.0005,price_change|volume_change|rsi|macd_signal|macd_hist,5,31.63,-10.27,0.768,0.512,0.082,0.062
+2025-07-28 19:08:23.566518,NeuralLinUCBAgent,3000,1000,2.0,0.9,,25.0,50.0,0.0005,-0.05,price_change|volume_change|rsi|macd_signal|macd_hist,5,22.95,-35.98,0.877,0.948,0.086,0.001
+2025-07-28 19:11:21.830728,LinearUCBAgent,2000,1000,2.0,0.95,,25.0,50.0,0.0005,-0.05,price_change|volume_change|rsi|macd_signal|macd_hist,5,31.88,-8.34,0.8225,0.521,0.0915,0.018

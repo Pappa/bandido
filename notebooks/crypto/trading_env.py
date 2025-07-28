@@ -241,13 +241,10 @@ class CryptoTradingEnvironment(BaseCryptoTradingEnvironment):
 
         possible_trades = self._possible_trades[self._current_step_index]
 
-        # TEMPORARY: Check that the possible trades are the same as the last step.
-        assert possible_trades == self._possible_trades[-1]
-
         effective_trade = possible_trades[action]
         self._last_trade = effective_trade
         
-        symbol_idx, symbol, trade_type, is_valid_action, num_assets_traded, trade_amount, cash_balance, reward = effective_trade
+        effective_action, symbol_idx, symbol, trade_type, is_valid_action, num_assets_traded, trade_amount, cash_balance, reward = effective_trade
 
         if trade_type == TradeType.BUY:
             self._asset_holdings[symbol_idx] += num_assets_traded
@@ -298,13 +295,13 @@ class CryptoTradingEnvironment(BaseCryptoTradingEnvironment):
 
             if trade_type == TradeType.HOLD:
                 # The reward for a HOLD is always the same.
-                possible_trades.append((symbol_idx, symbol, trade_type, is_valid_action, num_assets_traded, trade_amount, cash, hold_reward))
+                possible_trades.append((action, symbol_idx, symbol, trade_type, is_valid_action, num_assets_traded, trade_amount, cash, hold_reward))
                 continue
 
             if not is_valid_action:
                 # An invalid action results in a HOLD, plus a penalty.
                 reward = hold_reward + self._invalid_action_penalty
-                possible_trades.append((symbol_idx, symbol, TradeType.HOLD, is_valid_action, num_assets_traded, trade_amount, cash, reward))
+                possible_trades.append((action, symbol_idx, symbol, TradeType.HOLD, is_valid_action, num_assets_traded, trade_amount, cash, reward))
                 continue
 
             # --- Simulate the trade for a BUY or SELL ---
@@ -334,7 +331,7 @@ class CryptoTradingEnvironment(BaseCryptoTradingEnvironment):
             if portfolio_value_before > 0:
                 reward = (portfolio_value_after - portfolio_value_before) / portfolio_value_before
 
-            possible_trades.append((symbol_idx, symbol, trade_type, is_valid_action, num_assets_traded, trade_amount, cash, reward))
+            possible_trades.append((action, symbol_idx, symbol, trade_type, is_valid_action, num_assets_traded, trade_amount, cash, reward))
 
         self._possible_trades.append(possible_trades)
         
