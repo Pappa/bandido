@@ -14,6 +14,7 @@ RUN pip install pandas==2.3.0
 RUN pip install scikit-learn==1.7.0
 RUN pip install seaborn==0.13.2
 RUN pip install ccxt==4.4.95
+RUN pip install keras-tuner==1.4.7
 
 # RUN pip install numpy==2.0.2
 # RUN pip install pycairo
