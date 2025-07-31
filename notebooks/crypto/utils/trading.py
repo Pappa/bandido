@@ -1,11 +1,13 @@
 import pandas as pd
 import numpy as np
+from IPython.display import display
+
 
 # List of symbols to be used throughout the project.
 SYMBOLS = ["BTC", "DOGE", "XRP", "ETH", "SOL"]
 
 
-def preprocess_data(df):
+def process_candles(df):
     df.sort_values(by=["symbol", "timestamp"], inplace=True)
     # Ensure symbol format is consistent (e.g., 'BTC' not 'BTC/USDT')
     df["symbol"] = df["symbol"].str.split("/", n=1).str[0]
@@ -176,20 +178,16 @@ def create_wide_format_data(
         A tuple containing (observation_df, prices_df).
     """
     # --- Create the wide observation DataFrame ---
-    observation_df = long_df.pivot(index="timestamp", columns="symbol", values=features)
+    observation_df = (
+        long_df.pivot(index="timestamp", columns="symbol", values=features)
+        .swaplevel(i=1, j=0, axis=1)
+        .reindex(columns=symbols, level=0)
+        .reindex(columns=features, level=1)
+    )
 
-    # The pivot creates a multi-level column index, e.g., ('rsi', 'BTC').
-    # We need to flatten this into a single-level index, e.g., 'BTC_rsi'.
-    # We must also enforce the correct order: all of BTC's features, then all of ETH's, etc.
-    new_obs_cols = []
-    final_obs_cols = []
-    for symbol in symbols:
-        for feature in features:
-            new_obs_cols.append(f"{symbol}_{feature}")
-            final_obs_cols.append((feature, symbol))  # Original multi-level name
-
-    observation_df = observation_df[final_obs_cols]  # Enforce column order
-    observation_df.columns = new_obs_cols  # Rename to single-level
+    observation_df.columns = [
+        "_".join(col).strip() for col in observation_df.columns.values
+    ]
 
     # --- Create the wide prices DataFrame ---
     prices_df = long_df.pivot(index="timestamp", columns="symbol", values="close")
